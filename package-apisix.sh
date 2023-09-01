@@ -40,6 +40,10 @@ else
     max_or_version="1.21.5"
 fi
 
+OPENRESTY="apisix-base"
+min_or_version="5.0.0"
+max_or_version="6.0.0"
+
 # Determine the name of artifact
 # The defaut is apisix
 artifact="apisix"

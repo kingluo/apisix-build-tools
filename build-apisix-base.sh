@@ -4,9 +4,9 @@ set -x
 
 version=${version:-0.0.0}
 
-OPENRESTY_VERSION=${OPENRESTY_VERSION:-1.21.4.2}
+OPENRESTY_VERSION=${OPENRESTY_VERSION:-1.21.4.1}
 if [ "$OPENRESTY_VERSION" == "source" ] || [ "$OPENRESTY_VERSION" == "default" ]; then
-    OPENRESTY_VERSION="1.21.4.2"
+    OPENRESTY_VERSION="1.21.4.1"
 fi
 
 if ([ $# -gt 0 ] && [ "$1" == "latest" ]) || [ "$version" == "latest" ]; then
@@ -22,7 +22,7 @@ if ([ $# -gt 0 ] && [ "$1" == "latest" ]) || [ "$version" == "latest" ]; then
 else
     ngx_multi_upstream_module_ver="1.1.1"
     mod_dubbo_ver="1.0.2"
-    apisix_nginx_module_ver="1.14.0"
+    apisix_nginx_module_ver="1.12.0"
     wasm_nginx_module_ver="0.6.5"
     lua_var_nginx_module_ver="v0.5.3"
     grpc_client_nginx_module_ver="v0.4.3"
@@ -30,6 +30,16 @@ else
     debug_args=${debug_args:-}
     OR_PREFIX=${OR_PREFIX:="/usr/local/openresty"}
 fi
+
+ngx_multi_upstream_module_ver="master"
+mod_dubbo_ver="master"
+apisix_nginx_module_ver="main"
+wasm_nginx_module_ver="main"
+lua_var_nginx_module_ver="master"
+grpc_client_nginx_module_ver="main"
+amesh_ver="main"
+debug_args="--with-debug"
+OR_PREFIX=${OR_PREFIX:="/usr/local/openresty"}
 
 prev_workdir="$PWD"
 repo=$(basename "$prev_workdir")
@@ -138,6 +148,57 @@ else
     mv lua-resty-limit-traffic-$limit_ver bundle/lua-resty-limit-traffic-$or_limit_ver
 fi
 
+CACHE_QUICTLS_HIT=${CACHE_QUICTLS_HIT:-false}
+QUICTLS_TAG=${QUICTLS_TAG:-OpenSSL_1_1_1u-quic1}
+if [[ $CACHE_QUICTLS_HIT == false ]]; then
+(
+cd /tmp
+git clone https://github.com/quictls/openssl quictls
+cd quictls
+git checkout ${QUICTLS_TAG}
+./config --prefix=/usr/local/openresty/quictls
+make install
+)
+fi
+
+set +e
+(
+dir=$PWD
+
+cd $dir/bundle/nginx-1.21.4/
+patch -f -p1 < ${prev_workdir}/quic.patch
+
+cd $dir/../grpc-client-nginx-module-main
+patch -p1 < ${prev_workdir}/grpc-client-nginx-module-main.patch
+
+cd $dir/../ngx_multi_upstream_module-master
+patch -p1 < ${prev_workdir}/ngx_multi_upstream_module.patch
+
+cd $dir/../wasm-nginx-module-main
+patch -p1 < ${prev_workdir}/wasm-nginx-module-main.patch
+
+cd $dir/bundle/headers-more-nginx-module-0.33/src
+patch -p2 < ${prev_workdir}/headers-more-nginx-module.patch
+
+cd $dir/bundle/nginx-1.21.4
+patch -p2 < ${prev_workdir}/nginx-1.21.4.patch
+
+cd $dir/bundle/ngx_lua-0.10.21
+patch -p1 < ${prev_workdir}/ngx_lua.patch
+)
+set -e
+
+export_openresty_variables()
+{
+    export openssl_prefix=/usr/local/openresty/quictls;
+    export zlib_prefix=/usr/local/openresty/zlib;
+    export pcre_prefix=/usr/local/openresty/pcre;
+    export cc_opt="-DNGX_LUA_ABORT_AT_PANIC -I${zlib_prefix}/include -I${pcre_prefix}/include -I${openssl_prefix}/include";
+    export ld_opt="-L${zlib_prefix}/lib -L${pcre_prefix}/lib -L${openssl_prefix}/lib -Wl,-rpath,${zlib_prefix}/lib:${pcre_prefix}/lib:${openssl_prefix}/lib"
+}
+
+export_openresty_variables
+
 ./configure --prefix="$OR_PREFIX" \
     --with-cc-opt="-DAPISIX_BASE_VER=$version $grpc_engine_path $cc_opt" \
     --with-ld-opt="-Wl,-rpath,$OR_PREFIX/wasmtime-c-api/lib $ld_opt" \
@@ -177,6 +238,11 @@ fi
     --with-threads \
     --with-compat \
     --with-luajit-xcflags="$luajit_xcflags" \
+    --without-http_srcache_module \
+    --without-http_redis_module \
+    --without-http_redis2_module \
+    --without-pcre2 \
+    --with-http_v3_module \
     $no_pool_patch \
     -j`nproc`
 
